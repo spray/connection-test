@@ -24,26 +24,20 @@ object SprayCanClient extends App {
     name = "http-client"
   )
 
-  args match {
-    case Array(maxConn) =>
-      system.actorOf {
-        Props {
-          new ConnActor(
-            httpClient,
-            maxConn.toInt,
-            new AtomicInteger,
-            new AtomicBoolean
-          )
-        }
-      }
-    case _ =>
-      log.error("Usage: <executable> maxConn")
-      system.shutdown()
-  }
+  system.actorOf(Props(new ConnActor(httpClient)))
 }
 
-class ConnActor(httpClient: ActorRef, maxConn: Int, connCount: AtomicInteger,
-                closing: AtomicBoolean) extends Actor with ActorLogging {
+object ConnActor {
+  val ServerAddress = new InetSocketAddress("localhost", 8765)
+  val MaxConns = 50000
+  val Delay = 4900.millis // 5 seconds
+  val Ping = new {}
+  val HoldFor = 10 // requests
+}
+
+class ConnActor(httpClient: ActorRef,
+                connCount: AtomicInteger = new AtomicInteger,
+                closing: AtomicBoolean = new AtomicBoolean) extends Actor with ActorLogging {
   import ConnActor._
   var handle: Handle = _
   var nonce = ""
@@ -95,10 +89,10 @@ class ConnActor(httpClient: ActorRef, maxConn: Int, connCount: AtomicInteger,
   def onResponse(response: String) {
     if (response == nonce) {
       context.become(connected)
-      if (connNr == maxConn) {
+      if (connNr == MaxConns) {
         reqCounter match {
           case 1 =>
-            log.info("Successfully reached {} concurrent connections", maxConn)
+            log.info("Successfully reached {} concurrent connections", MaxConns)
             schedulePing()
           case x if x < HoldFor =>
             log.info("Holding for another {} PINGs", HoldFor - x)
@@ -112,7 +106,7 @@ class ConnActor(httpClient: ActorRef, maxConn: Int, connCount: AtomicInteger,
       } else {
         schedulePing()
         if (reqCounter == 1)
-          context.system.actorOf(Props(new ConnActor(httpClient, maxConn, connCount, closing)))
+          context.system.actorOf(Props(new ConnActor(httpClient, connCount, closing)))
       }
     } else {
       log.error("Received incorrect response '{}', should have been '{}'", response, nonce)
@@ -128,11 +122,4 @@ class ConnActor(httpClient: ActorRef, maxConn: Int, connCount: AtomicInteger,
     context.stop(self)
     if (connCount.decrementAndGet() == 0) context.system.shutdown()
   }
-}
-
-object ConnActor {
-  val ServerAddress = new InetSocketAddress("localhost", 8765)
-  val Delay = 4900.millis // 5 seconds
-  val Ping = new {}
-  val HoldFor = 10 // requests
 }

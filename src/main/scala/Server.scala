@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import akka.util.duration._
 import cc.spray.can.model.{HttpResponse, HttpRequest}
+import cc.spray.can.model.HttpMethods.GET
 import cc.spray.io.pipelines.MessageHandlerDispatch
 import cc.spray.io.IoWorker
 import cc.spray.can.server.HttpServer
@@ -27,10 +29,26 @@ object Server extends App {
   // the handler actor replies to incoming HttpRequests
   val handler = system.actorOf {
     Props {
-      ctx => {
-        case x: HttpRequest =>
-          if (x.uri != "/stop") ctx.sender ! HttpResponse(200, body = x.uri.getBytes("ISO-8859-1"))
-          else system.shutdown()
+      new Actor with ActorLogging {
+        var gatlingRequests = 0
+        val Delay = 60.seconds
+        def receive = {
+          case HttpRequest(GET, "/stop", _, _, _) =>
+            system.shutdown()
+
+          case HttpRequest(GET, "/gatling", _, _, _) =>
+            gatlingRequests += 1
+            if (gatlingRequests % 100 == 0) log.info("Received gatling request {}", gatlingRequests)
+            system.scheduler.scheduleOnce(Delay, self, sender -> gatlingRequests)
+
+          case HttpRequest(GET, uri, _, _, _) =>
+            sender ! response(uri)
+
+          case (client: ActorRef, req: Int) =>
+            if (req % 100 == 0) log.info("Responding to gatling request {}", req)
+            client ! response("PONG")
+        }
+        def response(msg: String) = HttpResponse(200, body = msg.getBytes("ISO-8859-1"))
       }
     }
   }
